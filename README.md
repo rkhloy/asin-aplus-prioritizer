@@ -94,6 +94,7 @@ The exact header names do not need to match because the user selects the correct
 ## Getting Started
 
 ### 1. Clone the repository
+### Clone the repository
 
 ```bash
 git clone https://github.com/rkhloy/asin-aplus-prioritizer.git
@@ -101,27 +102,25 @@ cd asin-aplus-prioritizer
 
 ```
 
-2. Install requirements
+##  Install requirements
 pip install -r requirements.txt
 
-3. Run the app
+##  Run the app
 streamlit run app.py
 
-Example Workflow
+## Example Workflow
 Upload a product data CSV
 Select the correct ASIN, title, bullets, description, images, reviews, and price columns
 Click Run Analysis
 Review the summary metrics
 Download the results CSV
 
-Sample Input Columns
-
+## Sample Input Columns
 Example headers the app can work with after manual mapping:
 
 asin,title,bullets,description,images,reviews,price
 
-Output Columns
-
+## Output Columns
 The output file includes the original input data plus analysis fields such as:
 
 optimization_score
@@ -130,7 +129,7 @@ smart_a_plus_check
 smart_a_plus_reason
 optimization_tips
 
-Project Structure
+## Project Structure
 asin-aplus-prioritizer/
 ├── app.py
 ├── README.md
@@ -138,14 +137,13 @@ asin-aplus-prioritizer/
 ├── sample_data/
 └── screenshots/
 
-Use Cases
-
+## Use Cases
 Prioritize Amazon listings that need content improvement
 Review exported marketplace product files in bulk
 Identify weak listings before optimization work begins
 Create a simple action file for ecommerce content updates
 
-Future Improvements
+## Future Improvements
 Add SKU support
 Add weighted scoring controls
 Add charts for priority distribution
@@ -153,10 +151,12 @@ Add better validation for duplicate mapping
 Add sorting and filtering options
 Add support for multiple export views
 
-Tech Stack
+## Tech Stack
 Python
 Streamlit
 Pandas
 
-Notes
-This is an MVP tool built with rule-based logic. The smart_a_plus_check field is a custom internal quality check and does not verify live Amazon A+ status directly.
+## Notes
+This is an MVP tool built with rule-based logic. The `smart_a_plus_check` field is a custom internal quality check and does not verify live Amazon A+ status directly.
+
+The output file is an analysis file for review and prioritization. It is not formatted to match Amazon's official category-specific upload templates and should not be treated as a direct Amazon bulk upload file.

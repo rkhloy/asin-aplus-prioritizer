@@ -1,12 +1,24 @@
 import streamlit as st
 import pandas as pd
 
-st.set_page_config(page_title="Amazon ASIN Content Prioritization Tool", layout="wide")
+st.set_page_config(page_title="A+ Listing Optimizer", layout="wide")
 
-st.title("Amazon ASIN Content Prioritization Tool")
-st.caption("Upload a CSV, map your columns, and score listing quality.")
+st.title("A+ Listing Optimizer")
+st.caption(
+    "Analyze product listing data from a CSV or Excel file and identify which ASINs need optimization based on listing quality signals."
+)
 
-uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
+st.markdown("### Getting Started")
+st.markdown(
+    """
+    1. Upload a CSV or Excel file containing your product listing data  
+    2. Map the required columns in the sidebar  
+    3. Click **Run Analysis** to score and prioritize your listings  
+    4. Review the results and download the output file
+    """
+)
+
+uploaded_file = st.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx"])
 
 
 def safe_number(value):
@@ -127,7 +139,16 @@ def score_row(row, col_map):
 
 if uploaded_file is not None:
     try:
-        df = pd.read_csv(uploaded_file)
+        file_name = uploaded_file.name.lower()
+
+        if file_name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file)
+        elif file_name.endswith(".xlsx"):
+            df = pd.read_excel(uploaded_file)
+        else:
+            st.error("Unsupported file type. Please upload a CSV or Excel file.")
+            st.stop()
+
         df.columns = [str(col).strip() for col in df.columns]
         columns = df.columns.tolist()
 
@@ -255,13 +276,31 @@ if uploaded_file is not None:
             st.subheader("Results")
             st.dataframe(df, use_container_width=True)
 
-            csv = df.to_csv(index=False).encode("utf-8")
+            st.info(
+                "The exported file is an analysis output for internal review and prioritization. "
+                "It is not formatted as an Amazon bulk upload template."
+            )
+
+            if file_name.endswith(".csv"):
+                output_data = df.to_csv(index=False).encode("utf-8")
+                output_file_name = "amazon_asin_results.csv"
+                output_mime = "text/csv"
+            else:
+                from io import BytesIO
+
+                output_buffer = BytesIO()
+                df.to_excel(output_buffer, index=False)
+                output_data = output_buffer.getvalue()
+                output_file_name = "amazon_asin_results.xlsx"
+                output_mime = (
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
 
             st.download_button(
-                "Download Results CSV",
-                data=csv,
-                file_name="amazon_asin_results.csv",
-                mime="text/csv",
+                "Download Results File",
+                data=output_data,
+                file_name=output_file_name,
+                mime=output_mime,
                 use_container_width=True,
             )
 
@@ -269,5 +308,6 @@ if uploaded_file is not None:
         st.error(f"Error reading file: {e}")
 else:
     st.info(
-        "Get started by uploading a CSV file containing your product listing data. After upload, map your columns in the sidebar and run the analysis."
+        "Upload a CSV or Excel file containing your product listing data to begin. "
+        "Then map the required columns in the sidebar and run the analysis."
     )
