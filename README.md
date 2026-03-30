@@ -93,7 +93,6 @@ The exact header names do not need to match because the user selects the correct
 
 ## Getting Started
 
-### 1. Clone the repository
 ### Clone the repository
 
 ```bash
