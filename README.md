@@ -1,104 +1,164 @@
 # Amazon ASIN Content Prioritization Tool
 
-A Streamlit app that analyzes Amazon product listing data and applies a weighted scoring framework to prioritize A+ Content optimization opportunities.
+A Streamlit MVP app that analyzes product listing data from a CSV file and helps identify which ASINs need optimization first.
 
 ## Overview
 
+This tool is designed for ecommerce and marketplace workflows where product data is often exported from Amazon, ERP, or ecommerce systems and reviewed in bulk.
 
-Amazon catalogs often contain too many listings to optimize all at once. This project helps identify which ASINs have the greatest potential for A+ Content improvement by evaluating listing quality, business value, and content gaps.
+The app allows a user to:
 
-The tool uploads Amazon product data from a CSV or Excel file, validates and standardizes the inputs, applies a weighted scoring model totaling 100 points, and outputs a ranked list of ASINs with recommended optimization actions.
+1. Upload a CSV file
+2. Map the required columns
+3. Run listing analysis
+4. Review optimization scores and priority levels
+5. Export the results as a CSV file
 
-## Business Problem
+## Features
 
-Amazon brands and ecommerce teams often face a resource allocation problem:
+- CSV upload
+- Manual column mapping
+- Rule-based optimization scoring
+- Smart A+ quality check
+- Optimization tips for each row
+- Summary metrics:
+  1. Total rows
+  2. High priority count
+  3. Medium priority count
+  4. Low priority count
+- CSV export for further action
 
-- Large catalogs create too many possible optimization targets
-- Not every product should receive A+ Content investment first
-- Missing A+ Content alone does not indicate priority
-- Teams need a more consistent way to decide which listings deserve attention first
+## How It Works
 
-This tool reframes A+ optimization as a prioritization problem rather than a manual listing review process.
+After a CSV file is uploaded, the app uses mapped columns to evaluate each product listing.
 
-## Solution
+### Scoring checks
 
-The app evaluates product listing data and uses a weighted scoring framework to rank ASINs by improvement opportunity.
+Each row is scored based on the following rules:
 
-It is designed to:
+1. Title length is at least 20 characters
+2. Bullets length is at least 30 characters
+3. Description length is at least 40 characters
+4. Image count is at least 5
+5. Review count is at least 10
+6. Price is greater than 0
 
-- Upload and read ASIN listing data
-- Validate and standardize key input fields
-- Apply a weighted scoring framework totaling 100 points
-- Identify which listing elements need optimization
-- Rank ASINs by priority
-- Export action-ready results to CSV
+### Priority rules
 
-## Framework
+1. 5 to 6 points = Low priority
+2. 3 to 4 points = Medium priority
+3. 0 to 2 points = High priority
 
-The scoring model is based on three layers:
+## Smart A+ Check
 
-1. **Listing Quality Audit**  
-   Measures current content strength using fields such as A+ status, image count, bullet count, description length, review count, and rating.
+The app includes a custom `smart_a_plus_check` field based on listing completeness signals.
 
-2. **Business Priority Score**  
-   Estimates the likely business value of improving a listing using weighted criteria.
+A row fails the smart A+ check if any of the following are true:
 
-3. **Scope Recommendation**  
-   Converts the analysis into an action category such as Must Do, Should Do, Could Do, or Defer.
+1. Title is too short
+2. Bullets are missing or weak
+3. Description is missing
+4. Fewer than 5 images
+5. No product reviews
 
-## Example Weighted Criteria
+The app outputs:
 
-The priority model uses weighted scoring across factors such as:
+- `smart_a_plus_check`
+- `smart_a_plus_reason`
 
-- Missing A+ Content
-- Reach Potential
-- Value / Margin Proxy
-- Customer Validation
-- Image Weakness
-- Bullet Weakness
-- Description Weakness
+## Expected Input
 
-The total priority score is capped at 100.
+The app works best with CSV files containing columns related to:
 
-## Core Features
+1. ASIN
+2. Title
+3. Bullets
+4. Description
+5. Images
+6. Reviews
+7. Price
 
-- CSV and Excel upload
-- Column mapping for flexible input files
-- Input validation and type cleaning
-- Weighted scoring for A+ optimization potential
-- Priority labeling and action recommendations
-- Sorted results table
-- CSV export
+The exact header names do not need to match because the user selects the correct columns in the sidebar.
 
-## Planned Output Columns
+## Screenshots
 
-The app is designed to output a ranked file including fields such as:
+### Default
+![default](screenshots/aplus_prioritization_tool_01.jpg)
 
-- ASIN
-- Product Title
-- Listing Quality Score
-- Priority Score
-- Scope Bucket
-- Recommended Action
-- Optimization Needed
-- Review Count
-- Image Count
-- Price
+### App Upload and Column Mapping
+![Upload and Mapping](screenshots/aplus_prioritization_tool_02.jpg)
 
-## Tech Stack
+### Analysis Results and Summary
+![Results and Summary](screenshots/aplus_prioritization_tool_03.jpg)
 
-- Python
-- Streamlit
-- Pandas
-- OpenPyXL
+## Getting Started
 
-## Project Structure
+### 1. Clone the repository
 
-```text
-asin-aplus-prioritizer/
+```bash
+git clone <https://github.com/rkhloy/asin-aplus-prioritizer.git>
+cd <asin-aplus-prioritizer>
+```
+2. Install requirements
+pip install -r requirements.txt
+
+3. Run the app
+
+streamlit run app.py
+
+Example Workflow
+
+    Upload a product data CSV
+    Select the correct ASIN, title, bullets, description, images, reviews, and price columns
+    Click Run Analysis
+    Review the summary metrics
+    Download the results CSV
+
+Sample Input Columns
+
+Example headers the app can work with after manual mapping:
+asin,title,bullets,description,images,reviews,price
+
+Output Columns
+
+The output file includes the original input data plus analysis fields such as:
+    optimization_score
+    priority
+    smart_a_plus_check
+    smart_a_plus_reason
+    optimization_tips
+
+Project Structure
+
+amazon-asin-tool/
 ├── app.py
 ├── README.md
 ├── requirements.txt
-├── .gitignore
-├── data/
+├── sample_data/
 └── screenshots/
+
+Use Cases
+
+Prioritize Amazon listings that need content improvement
+Review exported marketplace product files in bulk
+Identify weak listings before optimization work begins
+Create a simple action file for ecommerce content updates
+
+Future Improvements
+
+Add SKU support
+Add weighted scoring controls
+Add charts for priority distribution
+Add better validation for duplicate mapping
+Add sorting and filtering options
+Add support for multiple export views
+
+Tech Stack
+
+Python
+Streamlit
+Pandas
+
+Notes
+
+This is an MVP tool built with rule-based logic. The smart_a_plus_check is a custom internal quality check and does not verify live Amazon A+ status directly.
