@@ -17,7 +17,25 @@ st.markdown(
     4. Review the results and download the output file
     """
 )
+st.markdown(
+    """
+    <style>
+    div.stDownloadButton > button {
+        width: 100%;
+        height: 3.2em;
+        font-size: 1.05rem;
+        font-weight: 700;
+        border-radius: 10px;
+        border: 2px solid #2e7d32;
+    }
 
+    div.stDownloadButton > button:hover {
+        border: 2px solid #1b5e20;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 uploaded_file = st.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx"])
 
 
@@ -163,45 +181,25 @@ if uploaded_file is not None:
         price_default = suggest_column(columns, ["price"])
 
         asin_col = st.sidebar.selectbox(
-            "ASIN column",
-            columns,
-            index=get_index(columns, asin_default),
+            "ASIN column", columns, index=get_index(columns, asin_default)
         )
-
         title_col = st.sidebar.selectbox(
-            "Title column",
-            columns,
-            index=get_index(columns, title_default),
+            "Title column", columns, index=get_index(columns, title_default)
         )
-
         bullets_col = st.sidebar.selectbox(
-            "Bullets column",
-            columns,
-            index=get_index(columns, bullets_default),
+            "Bullets column", columns, index=get_index(columns, bullets_default)
         )
-
         description_col = st.sidebar.selectbox(
-            "Description column",
-            columns,
-            index=get_index(columns, description_default),
+            "Description column", columns, index=get_index(columns, description_default)
         )
-
         images_col = st.sidebar.selectbox(
-            "Images column",
-            columns,
-            index=get_index(columns, images_default),
+            "Images column", columns, index=get_index(columns, images_default)
         )
-
         reviews_col = st.sidebar.selectbox(
-            "Reviews column",
-            columns,
-            index=get_index(columns, reviews_default),
+            "Reviews column", columns, index=get_index(columns, reviews_default)
         )
-
         price_col = st.sidebar.selectbox(
-            "Price column",
-            columns,
-            index=get_index(columns, price_default),
+            "Price column", columns, index=get_index(columns, price_default)
         )
 
         col_map = {
@@ -306,8 +304,3 @@ if uploaded_file is not None:
 
     except Exception as e:
         st.error(f"Error reading file: {e}")
-else:
-    st.info(
-        "Upload a CSV or Excel file containing your product listing data to begin. "
-        "Then map the required columns in the sidebar and run the analysis."
-    )
