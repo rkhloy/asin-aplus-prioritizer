@@ -175,13 +175,13 @@ streamlit run app.py
 ## Screenshots
 
 ### Upload and Column Mapping
-![Upload and Mapping](screenshots/current/upload_mapping_v2.jpg)
+![Upload and Mapping](screenshots/current/v2_input_mapping.jpg)
 
 ### Results Table
-![Results Table](screenshots/current/output_results_v2.jpg)
+![Results Table](screenshots/current/v2_output_dashboard.jpg)
 
 ### Dashboard Charts
-![Dashboard Charts](screenshots/current/output_summary_v2.jpg)
+![Dashboard Charts](screenshots/current/v2_results_export.jpg)
 
 ## Sample Files
 Use the sample input file in the data/sample_input/ folder to test uploads and scoring behavior.
