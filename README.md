@@ -144,7 +144,7 @@ A weighted 100-point framework covering:
 
 ## Project Structure
 
-```text
+
 asin-aplus-prioritizer/
 ├── archive/
 │   ├── app_v1.py
@@ -204,3 +204,4 @@ AI-assisted optimization suggestions
 Why This Project Matters
 
 This project demonstrates how product data quality, marketplace operations, and prioritization logic can be turned into a practical internal decision-support tool for digital commerce teams.
+```text
