@@ -3,6 +3,7 @@ import pandas as pd
 import re
 from io import BytesIO
 from collections import Counter
+from typing import List
 
 st.set_page_config(page_title="ASIN A+ Prioritizer V2", layout="wide")
 
@@ -135,11 +136,19 @@ def score_tiered(value, tiers):
     return 0
 
 
+def add_tip(tips: List[str], text: str):
+    if text not in tips:
+        tips.append(text)
+
+
 def analyze_row(row, col_map):
     reasons = []
     tips = []
     categories = Counter()
     critical_issue = False
+    critical_reasons = []
+    warning_reasons = []
+    minor_reasons = []
 
     asin = get_text_value(row, col_map["asin"])
     sku = get_text_value(row, col_map["sku"])
@@ -187,11 +196,13 @@ def analyze_row(row, col_map):
     content_score += title_points
     if len(title) == 0:
         add_reason(reasons, categories, "Missing title", "Content")
-        tips.append("Add product title")
+        add_tip(tips, "Add product title")
         critical_issue = True
+        critical_reasons.append("Missing title")
     elif len(title) < 20:
         add_reason(reasons, categories, "Short title", "Content")
-        tips.append("Improve title length and clarity")
+        add_tip(tips, "Improve title length and clarity")
+        warning_reasons.append("Short title")
 
     desc_points = score_tiered(
         len(description),
@@ -204,11 +215,13 @@ def analyze_row(row, col_map):
     content_score += desc_points
     if len(description) == 0:
         add_reason(reasons, categories, "Missing description", "Content")
-        tips.append("Add product description")
+        add_tip(tips, "Add product description")
         critical_issue = True
+        critical_reasons.append("Missing description")
     elif len(description) < 40:
         add_reason(reasons, categories, "Weak description", "Content")
-        tips.append("Expand description details")
+        add_tip(tips, "Expand description details")
+        warning_reasons.append("Weak description")
 
     bullet_feature_count = len(populated_bullets) + len(populated_features)
     bf_points = score_tiered(
@@ -223,23 +236,27 @@ def analyze_row(row, col_map):
     content_score += bf_points
     if bullet_feature_count == 0:
         add_reason(reasons, categories, "Missing bullets and features", "Content")
-        tips.append("Add bullets or feature fields")
+        add_tip(tips, "Add bullets or feature fields")
         critical_issue = True
+        critical_reasons.append("Missing bullets and features")
     elif bullet_feature_count < 4:
         add_reason(reasons, categories, "Weak bullets/features", "Content")
-        tips.append("Complete more bullets and feature fields")
+        add_tip(tips, "Complete more bullets and feature fields")
+        warning_reasons.append("Weak bullets/features")
 
     brand_category_points = 0
     if brand:
         brand_category_points += 2
     else:
         add_reason(reasons, categories, "Missing brand", "Identity")
-        tips.append("Populate brand field")
+        add_tip(tips, "Populate brand field")
+        warning_reasons.append("Missing brand")
     if category:
         brand_category_points += 2
     else:
         add_reason(reasons, categories, "Missing category", "Identity")
-        tips.append("Populate category field")
+        add_tip(tips, "Populate category field")
+        warning_reasons.append("Missing category")
     content_score += brand_category_points
 
     # -----------------------------
@@ -252,8 +269,9 @@ def analyze_row(row, col_map):
         image_score += 8
     else:
         add_reason(reasons, categories, "Primary image missing or invalid", "Images")
-        tips.append("Add a valid primary image URL")
+        add_tip(tips, "Add a valid primary image URL")
         critical_issue = True
+        critical_reasons.append("Primary image missing or invalid")
 
     additional_images_count = sum(
         1 for x in image_values[1:] if x and looks_like_url(x)
@@ -269,14 +287,16 @@ def analyze_row(row, col_map):
     )
     if len(populated_images) < 5:
         add_reason(reasons, categories, "Less than 5 images", "Images")
-        tips.append("Add more gallery images")
+        add_tip(tips, "Add more gallery images")
+        warning_reasons.append("Less than 5 images")
 
     duplicate_images = len(set([x for x in populated_images if x])) < len(
         [x for x in populated_images if x]
     )
     if duplicate_images and populated_images:
         add_reason(reasons, categories, "Duplicate image URLs", "Images")
-        tips.append("Replace duplicate image URLs")
+        add_tip(tips, "Replace duplicate image URLs")
+        minor_reasons.append("Duplicate image URLs")
 
     image_completeness_pct = round((sum(1 for x in image_values if x) / 5) * 100, 1)
     missing_image_count = 5 - sum(1 for x in image_values if x)
@@ -290,8 +310,9 @@ def analyze_row(row, col_map):
         pricing_score += 5
     else:
         add_reason(reasons, categories, "Invalid default price", "Pricing")
-        tips.append("Fix default price")
+        add_tip(tips, "Fix default price")
         critical_issue = True
+        critical_reasons.append("Invalid default price")
 
     sale_price_mapped = col_map["sale_price"] != "-- Not Mapped --"
     if sale_price_mapped:
@@ -299,7 +320,8 @@ def analyze_row(row, col_map):
             pricing_score += 5
         else:
             add_reason(reasons, categories, "Invalid sale price", "Pricing")
-            tips.append("Fix sale price value")
+            add_tip(tips, "Fix sale price value")
+            warning_reasons.append("Invalid sale price")
     else:
         pricing_score += 5
 
@@ -313,12 +335,14 @@ def analyze_row(row, col_map):
             add_reason(
                 reasons, categories, "Sale price exceeds default price", "Pricing"
             )
-            tips.append("Review sale price logic")
+            add_tip(tips, "Review sale price logic")
             critical_issue = True
+            critical_reasons.append("Sale price exceeds default price")
             pricing_issue_flag = "Yes"
         if discount_pct > 80:
             add_reason(reasons, categories, "Extreme discount flagged", "Pricing")
-            tips.append("Review extreme discount")
+            add_tip(tips, "Review extreme discount")
+            minor_reasons.append("Extreme discount flagged")
             pricing_issue_flag = "Yes"
     elif default_price > 0 and sale_price_mapped:
         pricing_score += 3
@@ -350,7 +374,8 @@ def analyze_row(row, col_map):
         )
     else:
         add_reason(reasons, categories, "Missing meta title", "SEO / Meta")
-        tips.append("Add meta title")
+        add_tip(tips, "Add meta title")
+        warning_reasons.append("Missing meta title")
 
     overlap = text_overlap_score(title, meta_title)
     if title and meta_title:
@@ -359,10 +384,12 @@ def analyze_row(row, col_map):
         elif overlap >= 0.25:
             search_score += 3
             add_reason(reasons, categories, "Partial title/meta mismatch", "SEO / Meta")
-            tips.append("Align meta title with product title")
+            add_tip(tips, "Align meta title with product title")
+            warning_reasons.append("Partial title/meta mismatch")
         else:
             add_reason(reasons, categories, "Title/meta mismatch", "SEO / Meta")
-            tips.append("Improve title and meta title consistency")
+            add_tip(tips, "Improve title and meta title consistency")
+            warning_reasons.append("Title/meta mismatch")
     else:
         if title or meta_title:
             add_reason(reasons, categories, "Incomplete title/meta pair", "SEO / Meta")
@@ -378,7 +405,8 @@ def analyze_row(row, col_map):
                 "Category not reflected in title/meta",
                 "SEO / Meta",
             )
-            tips.append("Align title/meta with category keywords")
+            add_tip(tips, "Align title/meta with category keywords")
+            minor_reasons.append("Category not reflected in title/meta")
     else:
         search_score += 0
 
@@ -390,7 +418,8 @@ def analyze_row(row, col_map):
         reviews_score += 4
     else:
         add_reason(reasons, categories, "No product reviews", "Reviews")
-        tips.append("Build review count")
+        add_tip(tips, "Build review count")
+        minor_reasons.append("No product reviews")
 
     if reviews >= 50:
         reviews_score += 6
@@ -409,21 +438,24 @@ def analyze_row(row, col_map):
         channel_score += 4
     else:
         add_reason(reasons, categories, "Missing channel/source", "Channel Governance")
-        tips.append("Populate channel/source")
+        add_tip(tips, "Populate channel/source")
+        minor_reasons.append("Missing channel/source")
 
     if asin:
         channel_score += 3
     else:
         add_reason(reasons, categories, "Missing ASIN", "Identity")
-        tips.append("Populate ASIN")
+        add_tip(tips, "Populate ASIN")
         critical_issue = True
+        critical_reasons.append("Missing ASIN")
 
     if sku:
         channel_score += 3
     else:
         add_reason(reasons, categories, "Missing SKU", "Identity")
-        tips.append("Populate SKU")
+        add_tip(tips, "Populate SKU")
         critical_issue = True
+        critical_reasons.append("Missing SKU")
 
     # Placeholder governance check for future multi-channel comparison
     if not channel:
@@ -482,20 +514,82 @@ def analyze_row(row, col_map):
     bullet_completeness_pct = round((len(populated_bullets) / 4) * 100, 1)
 
     smart_aplus_readiness = "Yes" if total_score >= 80 and not critical_issue else "No"
+    smart_aplus_ready_flag = 1 if smart_aplus_readiness == "Yes" else 0
     failure_reasons = "; ".join(dict.fromkeys(reasons))
     optimization_tips = "; ".join(dict.fromkeys(tips))
     top_issue_category = categories.most_common(1)[0][0] if categories else "None"
+    critical_issue_flag = 1 if critical_issue else 0
+    warning_issue_count = len(dict.fromkeys(warning_reasons))
+    minor_issue_count = len(dict.fromkeys(minor_reasons))
+    critical_issue_count = len(dict.fromkeys(critical_reasons))
+    severity_label = (
+        "Critical"
+        if critical_issue_flag
+        else (
+            "Warning"
+            if warning_issue_count > 0
+            else ("Minor" if minor_issue_count > 0 else "Healthy")
+        )
+    )
+    priority_rank = 1 if priority == "High" else 2 if priority == "Medium" else 3
+
+    if critical_issue_flag:
+        recommended_next_action = (
+            "Fix critical listing issues before publish or optimization"
+        )
+    elif priority == "High":
+        if top_issue_category == "Images":
+            recommended_next_action = "Add primary image and complete gallery"
+        elif top_issue_category == "Pricing":
+            recommended_next_action = "Review default and sale price logic"
+        elif top_issue_category == "Content":
+            recommended_next_action = (
+                "Complete title, description, bullets, and features"
+            )
+        elif top_issue_category == "Identity":
+            recommended_next_action = (
+                "Populate missing ASIN, SKU, brand, or category data"
+            )
+        else:
+            recommended_next_action = (
+                "Review failure reasons and resolve the highest-impact gaps"
+            )
+    elif priority == "Medium":
+        if top_issue_category == "SEO / Meta":
+            recommended_next_action = (
+                "Align meta title with product title and category keywords"
+            )
+        elif top_issue_category == "Reviews":
+            recommended_next_action = "Improve social proof and review coverage"
+        else:
+            recommended_next_action = "Address warnings to improve listing readiness"
+    else:
+        recommended_next_action = "Monitor listing and maintain content quality"
 
     return {
         "optimization_score": total_score,
+        "content_score": round(content_score, 1),
+        "image_score": round(image_score, 1),
+        "pricing_score": round(pricing_score, 1),
+        "search_score": round(search_score, 1),
+        "reviews_score": round(reviews_score, 1),
+        "channel_score": round(channel_score, 1),
         "priority": priority,
+        "priority_rank": priority_rank,
         "score_band": score_band,
         "smart_a_plus_readiness": smart_aplus_readiness,
+        "smart_a_plus_ready_flag": smart_aplus_ready_flag,
         "completeness_pct": completeness_pct,
         "issue_count": len(set(reasons)),
         "failure_reasons": failure_reasons,
         "optimization_tips": optimization_tips,
         "top_issue_category": top_issue_category,
+        "critical_issue_flag": critical_issue_flag,
+        "critical_issue_count": critical_issue_count,
+        "warning_issue_count": warning_issue_count,
+        "minor_issue_count": minor_issue_count,
+        "severity_label": severity_label,
+        "recommended_next_action": recommended_next_action,
         "image_completeness_pct": image_completeness_pct,
         "missing_image_count": missing_image_count,
         "feature_completeness_pct": feature_completeness_pct,
@@ -668,12 +762,26 @@ if uploaded_file is not None:
                 col_map["category"],
                 col_map["channel"],
                 "optimization_score",
+                "content_score",
+                "image_score",
+                "pricing_score",
+                "search_score",
+                "reviews_score",
+                "channel_score",
                 "priority",
+                "priority_rank",
                 "score_band",
                 "smart_a_plus_readiness",
+                "smart_a_plus_ready_flag",
                 "completeness_pct",
                 "issue_count",
                 "top_issue_category",
+                "critical_issue_flag",
+                "critical_issue_count",
+                "warning_issue_count",
+                "minor_issue_count",
+                "severity_label",
+                "recommended_next_action",
                 "failure_reasons",
                 "optimization_tips",
                 "image_completeness_pct",
@@ -754,19 +862,147 @@ if uploaded_file is not None:
             st.bar_chart(score_band_chart)
 
             st.subheader("Results")
-            st.dataframe(output_df, use_container_width=True)
+
+            st.markdown("**Filter and Sort**")
+            filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
+            priority_filter = filter_col1.multiselect(
+                "Priority",
+                options=["High", "Medium", "Low"],
+                default=["High", "Medium", "Low"],
+            )
+            channel_options = (
+                sorted(
+                    [
+                        x
+                        for x in output_df[col_map["channel"]]
+                        .dropna()
+                        .astype(str)
+                        .unique()
+                        .tolist()
+                    ]
+                )
+                if col_map["channel"] in output_df.columns
+                and col_map["channel"] != "-- Not Mapped --"
+                else []
+            )
+            channel_filter = (
+                filter_col2.multiselect(
+                    "Channel/Source",
+                    options=channel_options,
+                    default=channel_options,
+                )
+                if channel_options
+                else []
+            )
+            pricing_filter = filter_col3.selectbox(
+                "Pricing Issue Flag",
+                options=["All", "Yes", "No"],
+                index=0,
+            )
+            sort_by = filter_col4.selectbox(
+                "Sort By",
+                options=[
+                    "Priority Rank",
+                    "Optimization Score",
+                    "Issue Count",
+                    "Missing Image Count",
+                ],
+                index=0,
+            )
+
+            filtered_df = output_df[output_df["priority"].isin(priority_filter)].copy()
+            if channel_options:
+                filtered_df = filtered_df[
+                    filtered_df[col_map["channel"]].astype(str).isin(channel_filter)
+                ]
+            if pricing_filter != "All":
+                filtered_df = filtered_df[
+                    filtered_df["pricing_issue_flag"] == pricing_filter
+                ]
+
+            if sort_by == "Priority Rank":
+                filtered_df = filtered_df.sort_values(
+                    by=["priority_rank", "optimization_score"], ascending=[True, True]
+                )
+            elif sort_by == "Optimization Score":
+                filtered_df = filtered_df.sort_values(
+                    by=["optimization_score"], ascending=[True]
+                )
+            elif sort_by == "Issue Count":
+                filtered_df = filtered_df.sort_values(
+                    by=["issue_count", "optimization_score"], ascending=[False, True]
+                )
+            elif sort_by == "Missing Image Count":
+                filtered_df = filtered_df.sort_values(
+                    by=["missing_image_count", "optimization_score"],
+                    ascending=[False, True],
+                )
+
+            def style_key_cells(row):
+                styles = ["" for _ in row.index]
+                priority_styles = {
+                    "High": "background-color: #7f1d1d; color: #ffffff; font-weight: 700;",
+                    "Medium": "background-color: #854d0e; color: #ffffff; font-weight: 700;",
+                    "Low": "background-color: #166534; color: #ffffff; font-weight: 700;",
+                }
+                score_styles = {
+                    "High": "background-color: #450a0a; color: #ffffff; font-weight: 700;",
+                    "Medium": "background-color: #78350f; color: #ffffff; font-weight: 700;",
+                    "Low": "background-color: #14532d; color: #ffffff; font-weight: 700;",
+                }
+                key_columns = [
+                    "priority",
+                    "priority_rank",
+                    "optimization_score",
+                    "smart_a_plus_readiness",
+                    "smart_a_plus_ready_flag",
+                ]
+                for col in key_columns:
+                    if col in row.index:
+                        styles[list(row.index).index(col)] = priority_styles.get(
+                            row["priority"], ""
+                        )
+                if "recommended_next_action" in row.index:
+                    styles[list(row.index).index("recommended_next_action")] = (
+                        "color: #e5e7eb; font-weight: 600;"
+                    )
+                if "severity_label" in row.index:
+                    severity_map = {
+                        "Critical": "background-color: #991b1b; color: #ffffff; font-weight: 700;",
+                        "Warning": "background-color: #92400e; color: #ffffff; font-weight: 700;",
+                        "Minor": "background-color: #1f2937; color: #ffffff; font-weight: 700;",
+                        "Healthy": "background-color: #065f46; color: #ffffff; font-weight: 700;",
+                    }
+                    styles[list(row.index).index("severity_label")] = severity_map.get(
+                        row["severity_label"], ""
+                    )
+                for identifier_col in [col_map["sku"], col_map["asin"]]:
+                    if identifier_col in row.index and row["priority"] == "High":
+                        styles[list(row.index).index(identifier_col)] = (
+                            "background-color: #3f0d12; color: #ffffff; font-weight: 700;"
+                        )
+                if "optimization_score" in row.index:
+                    styles[list(row.index).index("optimization_score")] = (
+                        score_styles.get(row["priority"], "")
+                    )
+                return styles
+
+            st.dataframe(
+                filtered_df.style.apply(style_key_cells, axis=1),
+                use_container_width=True,
+            )
 
             st.info(
                 "This export is designed for internal review and prioritization. It is not formatted as an Amazon bulk upload template."
             )
 
             if file_name.endswith(".csv"):
-                output_data = output_df.to_csv(index=False).encode("utf-8")
+                output_data = filtered_df.to_csv(index=False).encode("utf-8")
                 output_file_name = "asin_aplus_prioritizer_v2_results.csv"
                 output_mime = "text/csv"
             else:
                 output_buffer = BytesIO()
-                output_df.to_excel(output_buffer, index=False)
+                filtered_df.to_excel(output_buffer, index=False)
                 output_data = output_buffer.getvalue()
                 output_file_name = "asin_aplus_prioritizer_v2_results.xlsx"
                 output_mime = (
