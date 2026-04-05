@@ -1,53 +1,42 @@
-import streamlit as st
-import pandas as pd
 import re
 from io import BytesIO
 from collections import Counter
-from typing import List
+from typing import Dict, List
 
-st.set_page_config(page_title="ASIN A+ Prioritizer V2", layout="wide")
+import pandas as pd
+import streamlit as st
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 
-st.title("ASIN A+ Prioritizer V2")
+
+st.set_page_config(page_title="ASIN A+ Prioritizer", layout="wide")
+
+st.title("ASIN A+ Prioritizer")
 st.caption(
-    "Analyze product listing data from CSV or Excel, score listing quality, and prioritize which products need optimization first."
-)
-
-st.markdown(
-    """
-### What this version adds
-- Richer field mapping: SKU, brand, category, features, images, pricing, meta title, channel/source
-- Weighted 100-point scoring model
-- Failure reason tracking and issue categories
-- Dashboard charts for priorities, failure reasons, and score bands
-- Stronger downloadable output for internal review
-"""
-)
-
-st.markdown(
-    """
-    <style>
-    div.stDownloadButton > button {
-        width: 100%;
-        height: 3.2em;
-        font-size: 1.05rem;
-        font-weight: 700;
-        border-radius: 10px;
-        border: 2px solid #2e7d32;
-    }
-    div.stDownloadButton > button:hover {
-        border: 2px solid #1b5e20;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
+    "Upload listing data, score SKU quality, and export a clean prioritization file."
 )
 
 uploaded_file = st.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx"])
 
 
-# -----------------------------
-# Helper functions
-# -----------------------------
+if "analysis_ready" not in st.session_state:
+    st.session_state.analysis_ready = False
+if "output_df" not in st.session_state:
+    st.session_state.output_df = None
+if "source_file_name" not in st.session_state:
+    st.session_state.source_file_name = ""
+if "last_uploaded_name" not in st.session_state:
+    st.session_state.last_uploaded_name = ""
+if "current_mapping" not in st.session_state:
+    st.session_state.current_mapping = None
+
+
+def clean_text(value):
+    if pd.isna(value):
+        return ""
+    return str(value).strip()
+
+
 def safe_number(value):
     try:
         if pd.isna(value):
@@ -60,10 +49,13 @@ def safe_number(value):
         return 0.0
 
 
-def clean_text(value):
-    if pd.isna(value):
-        return ""
-    return str(value).strip()
+def looks_like_url(value):
+    text = clean_text(value).lower()
+    return (
+        text.startswith("http://")
+        or text.startswith("https://")
+        or text.startswith("www.")
+    )
 
 
 def get_text_value(row, column_name):
@@ -93,47 +85,9 @@ def get_index(options, suggested):
     return 0
 
 
-def tokenize(text):
-    return set(re.findall(r"[a-z0-9]+", clean_text(text).lower()))
-
-
-def text_overlap_score(text1, text2):
-    tokens1 = tokenize(text1)
-    tokens2 = tokenize(text2)
-    if not tokens1 or not tokens2:
-        return 0.0
-    overlap = len(tokens1.intersection(tokens2))
-    return overlap / max(len(tokens1), len(tokens2))
-
-
-def is_blank(value):
-    return clean_text(value) == ""
-
-
-def looks_like_url(value):
-    text = clean_text(value).lower()
-    return (
-        text.startswith("http://")
-        or text.startswith("https://")
-        or text.startswith("www.")
-    )
-
-
 def add_reason(reasons, category_counter, reason, category):
     reasons.append(reason)
     category_counter[category] += 1
-
-
-def score_binary(condition, points_if_true):
-    return points_if_true if condition else 0
-
-
-def score_tiered(value, tiers):
-    # tiers format: [(condition, points), ...]
-    for condition, points in tiers:
-        if condition:
-            return points
-    return 0
 
 
 def add_tip(tips: List[str], text: str):
@@ -141,17 +95,42 @@ def add_tip(tips: List[str], text: str):
         tips.append(text)
 
 
+def format_excel_export(output_buffer, export_df):
+    with pd.ExcelWriter(output_buffer, engine="openpyxl") as writer:
+        export_df.to_excel(writer, index=False, sheet_name="Results")
+        worksheet = writer.sheets["Results"]
+        worksheet.freeze_panes = "A2"
+        worksheet.auto_filter.ref = worksheet.dimensions
+
+        header_fill = PatternFill(fill_type="solid", fgColor="1F2937")
+        header_font = Font(color="FFFFFF", bold=True)
+        header_alignment = Alignment(
+            horizontal="center", vertical="center", wrap_text=True
+        )
+
+        for cell in worksheet[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = header_alignment
+
+        for col_idx, col_name in enumerate(export_df.columns, start=1):
+            max_length = len(str(col_name))
+            sample_values = export_df[col_name].astype(str).fillna("").head(50).tolist()
+            for val in sample_values:
+                max_length = max(max_length, len(val))
+            worksheet.column_dimensions[get_column_letter(col_idx)].width = min(
+                max(max_length + 2, 12), 36
+            )
+
+
 def analyze_row(row, col_map):
     reasons = []
     tips = []
     categories = Counter()
     critical_issue = False
-    critical_reasons = []
-    warning_reasons = []
-    minor_reasons = []
 
-    asin = get_text_value(row, col_map["asin"])
     sku = get_text_value(row, col_map["sku"])
+    asin = get_text_value(row, col_map["asin"])
     title = get_text_value(row, col_map["title"])
     brand = get_text_value(row, col_map["brand"])
     category = get_text_value(row, col_map["category"])
@@ -174,305 +153,106 @@ def analyze_row(row, col_map):
 
     default_price = safe_number(get_value(row, col_map["default_price"]))
     sale_price = safe_number(get_value(row, col_map["sale_price"]))
-    reviews = safe_number(get_value(row, col_map["reviews"]))
 
     populated_bullets = [x for x in bullet_values if x]
     populated_features = [x for x in feature_values if x]
     populated_images = [x for x in image_values if x]
 
-    # -----------------------------
-    # 1) Content completeness - 30
-    # -----------------------------
     content_score = 0
-
-    title_points = score_tiered(
-        len(title),
-        [
-            (len(title) >= 60, 8),
-            (len(title) >= 40, 6),
-            (len(title) >= 20, 3),
-        ],
-    )
-    content_score += title_points
-    if len(title) == 0:
-        add_reason(reasons, categories, "Missing title", "Content")
-        add_tip(tips, "Add product title")
+    if len(title) >= 60:
+        content_score += 10
+    elif len(title) >= 30:
+        content_score += 7
+    elif len(title) >= 10:
+        content_score += 3
+    else:
+        add_reason(reasons, categories, "Missing or weak title", "Content")
+        add_tip(tips, "Improve product title")
         critical_issue = True
-        critical_reasons.append("Missing title")
-    elif len(title) < 20:
-        add_reason(reasons, categories, "Short title", "Content")
-        add_tip(tips, "Improve title length and clarity")
-        warning_reasons.append("Short title")
 
-    desc_points = score_tiered(
-        len(description),
-        [
-            (len(description) >= 150, 8),
-            (len(description) >= 80, 6),
-            (len(description) >= 40, 3),
-        ],
-    )
-    content_score += desc_points
-    if len(description) == 0:
-        add_reason(reasons, categories, "Missing description", "Content")
-        add_tip(tips, "Add product description")
-        critical_issue = True
-        critical_reasons.append("Missing description")
-    elif len(description) < 40:
-        add_reason(reasons, categories, "Weak description", "Content")
-        add_tip(tips, "Expand description details")
-        warning_reasons.append("Weak description")
+    if len(description) >= 120:
+        content_score += 10
+    elif len(description) >= 40:
+        content_score += 6
+    else:
+        add_reason(reasons, categories, "Missing or weak description", "Content")
+        add_tip(tips, "Improve product description")
+        if len(description) == 0:
+            critical_issue = True
 
     bullet_feature_count = len(populated_bullets) + len(populated_features)
-    bf_points = score_tiered(
-        bullet_feature_count,
-        [
-            (bullet_feature_count >= 6, 10),
-            (bullet_feature_count >= 4, 8),
-            (bullet_feature_count >= 2, 5),
-            (bullet_feature_count >= 1, 2),
-        ],
-    )
-    content_score += bf_points
-    if bullet_feature_count == 0:
+    if bullet_feature_count >= 6:
+        content_score += 10
+    elif bullet_feature_count >= 3:
+        content_score += 6
+    elif bullet_feature_count >= 1:
+        content_score += 3
+    else:
         add_reason(reasons, categories, "Missing bullets and features", "Content")
         add_tip(tips, "Add bullets or feature fields")
-        critical_issue = True
-        critical_reasons.append("Missing bullets and features")
-    elif bullet_feature_count < 4:
-        add_reason(reasons, categories, "Weak bullets/features", "Content")
-        add_tip(tips, "Complete more bullets and feature fields")
-        warning_reasons.append("Weak bullets/features")
 
-    brand_category_points = 0
-    if brand:
-        brand_category_points += 2
-    else:
-        add_reason(reasons, categories, "Missing brand", "Identity")
-        add_tip(tips, "Populate brand field")
-        warning_reasons.append("Missing brand")
-    if category:
-        brand_category_points += 2
-    else:
-        add_reason(reasons, categories, "Missing category", "Identity")
-        add_tip(tips, "Populate category field")
-        warning_reasons.append("Missing category")
-    content_score += brand_category_points
-
-    # -----------------------------
-    # 2) Image readiness - 20
-    # -----------------------------
     image_score = 0
-    image1 = image_values[0]
-
-    if image1 and looks_like_url(image1):
-        image_score += 8
+    if image_values[0] and looks_like_url(image_values[0]):
+        image_score += 10
     else:
         add_reason(reasons, categories, "Primary image missing or invalid", "Images")
-        add_tip(tips, "Add a valid primary image URL")
+        add_tip(tips, "Add valid primary image URL")
         critical_issue = True
-        critical_reasons.append("Primary image missing or invalid")
 
-    additional_images_count = sum(
-        1 for x in image_values[1:] if x and looks_like_url(x)
-    )
-    image_score += score_tiered(
-        additional_images_count,
-        [
-            (additional_images_count >= 4, 12),
-            (additional_images_count >= 3, 9),
-            (additional_images_count >= 2, 6),
-            (additional_images_count >= 1, 3),
-        ],
-    )
-    if len(populated_images) < 5:
-        add_reason(reasons, categories, "Less than 5 images", "Images")
+    valid_extra_images = sum(1 for x in image_values[1:] if x and looks_like_url(x))
+    if valid_extra_images >= 4:
+        image_score += 10
+    elif valid_extra_images >= 2:
+        image_score += 6
+    elif valid_extra_images >= 1:
+        image_score += 3
+    else:
+        add_reason(reasons, categories, "Low image coverage", "Images")
         add_tip(tips, "Add more gallery images")
-        warning_reasons.append("Less than 5 images")
 
-    duplicate_images = len(set([x for x in populated_images if x])) < len(
-        [x for x in populated_images if x]
-    )
-    if duplicate_images and populated_images:
-        add_reason(reasons, categories, "Duplicate image URLs", "Images")
-        add_tip(tips, "Replace duplicate image URLs")
-        minor_reasons.append("Duplicate image URLs")
-
-    image_completeness_pct = round((sum(1 for x in image_values if x) / 5) * 100, 1)
-    missing_image_count = 5 - sum(1 for x in image_values if x)
-
-    # -----------------------------
-    # 3) Pricing integrity - 15
-    # -----------------------------
     pricing_score = 0
-
     if default_price > 0:
-        pricing_score += 5
+        pricing_score += 10
     else:
         add_reason(reasons, categories, "Invalid default price", "Pricing")
         add_tip(tips, "Fix default price")
         critical_issue = True
-        critical_reasons.append("Invalid default price")
 
-    sale_price_mapped = col_map["sale_price"] != "-- Not Mapped --"
-    if sale_price_mapped:
-        if sale_price >= 0:
-            pricing_score += 5
-        else:
-            add_reason(reasons, categories, "Invalid sale price", "Pricing")
-            add_tip(tips, "Fix sale price value")
-            warning_reasons.append("Invalid sale price")
-    else:
-        pricing_score += 5
-
-    pricing_issue_flag = "No"
-    discount_pct = 0.0
-    if default_price > 0 and sale_price_mapped and sale_price > 0:
-        discount_pct = round(((default_price - sale_price) / default_price) * 100, 2)
-        if sale_price <= default_price:
-            pricing_score += 5
+    if col_map["sale_price"] != "-- Not Mapped --":
+        if sale_price == 0 or sale_price <= default_price:
+            pricing_score += 10
         else:
             add_reason(
                 reasons, categories, "Sale price exceeds default price", "Pricing"
             )
             add_tip(tips, "Review sale price logic")
             critical_issue = True
-            critical_reasons.append("Sale price exceeds default price")
-            pricing_issue_flag = "Yes"
-        if discount_pct > 80:
-            add_reason(reasons, categories, "Extreme discount flagged", "Pricing")
-            add_tip(tips, "Review extreme discount")
-            minor_reasons.append("Extreme discount flagged")
-            pricing_issue_flag = "Yes"
-    elif default_price > 0 and sale_price_mapped:
-        pricing_score += 3
     else:
-        pricing_score += 5
+        pricing_score += 10
 
-    if any(
-        r in reasons
-        for r in [
-            "Invalid default price",
-            "Invalid sale price",
-            "Sale price exceeds default price",
-        ]
-    ):
-        pricing_issue_flag = "Yes"
+    metadata_score = 0
+    if brand:
+        metadata_score += 5
+    else:
+        add_reason(reasons, categories, "Missing brand", "Metadata")
+        add_tip(tips, "Populate brand")
 
-    # -----------------------------
-    # 4) Search & merchandising quality - 15
-    # -----------------------------
-    search_score = 0
+    if category:
+        metadata_score += 5
+    else:
+        add_reason(reasons, categories, "Missing category", "Metadata")
+        add_tip(tips, "Populate category")
 
     if meta_title:
-        search_score += score_tiered(
-            len(meta_title),
-            [
-                (len(meta_title) >= 40, 5),
-                (len(meta_title) >= 20, 3),
-            ],
-        )
+        metadata_score += 5
     else:
-        add_reason(reasons, categories, "Missing meta title", "SEO / Meta")
+        add_reason(reasons, categories, "Missing meta title", "Metadata")
         add_tip(tips, "Add meta title")
-        warning_reasons.append("Missing meta title")
-
-    overlap = text_overlap_score(title, meta_title)
-    if title and meta_title:
-        if overlap >= 0.5:
-            search_score += 5
-        elif overlap >= 0.25:
-            search_score += 3
-            add_reason(reasons, categories, "Partial title/meta mismatch", "SEO / Meta")
-            add_tip(tips, "Align meta title with product title")
-            warning_reasons.append("Partial title/meta mismatch")
-        else:
-            add_reason(reasons, categories, "Title/meta mismatch", "SEO / Meta")
-            add_tip(tips, "Improve title and meta title consistency")
-            warning_reasons.append("Title/meta mismatch")
-    else:
-        if title or meta_title:
-            add_reason(reasons, categories, "Incomplete title/meta pair", "SEO / Meta")
-
-    title_category_text = f"{title} {meta_title}".lower()
-    if category:
-        if category.lower() in title_category_text:
-            search_score += 5
-        else:
-            add_reason(
-                reasons,
-                categories,
-                "Category not reflected in title/meta",
-                "SEO / Meta",
-            )
-            add_tip(tips, "Align title/meta with category keywords")
-            minor_reasons.append("Category not reflected in title/meta")
-    else:
-        search_score += 0
-
-    # -----------------------------
-    # 5) Reviews/social proof - 10
-    # -----------------------------
-    reviews_score = 0
-    if reviews > 0:
-        reviews_score += 4
-    else:
-        add_reason(reasons, categories, "No product reviews", "Reviews")
-        add_tip(tips, "Build review count")
-        minor_reasons.append("No product reviews")
-
-    if reviews >= 50:
-        reviews_score += 6
-    elif reviews >= 10:
-        reviews_score += 4
-    elif reviews >= 1:
-        reviews_score += 2
-
-    # -----------------------------
-    # 6) Channel consistency / governance - 10
-    # -----------------------------
-    channel_score = 0
-    channel_mismatch_flag = "No"
 
     if channel:
-        channel_score += 4
-    else:
-        add_reason(reasons, categories, "Missing channel/source", "Channel Governance")
-        add_tip(tips, "Populate channel/source")
-        minor_reasons.append("Missing channel/source")
+        metadata_score += 5
 
-    if asin:
-        channel_score += 3
-    else:
-        add_reason(reasons, categories, "Missing ASIN", "Identity")
-        add_tip(tips, "Populate ASIN")
-        critical_issue = True
-        critical_reasons.append("Missing ASIN")
-
-    if sku:
-        channel_score += 3
-    else:
-        add_reason(reasons, categories, "Missing SKU", "Identity")
-        add_tip(tips, "Populate SKU")
-        critical_issue = True
-        critical_reasons.append("Missing SKU")
-
-    # Placeholder governance check for future multi-channel comparison
-    if not channel:
-        channel_mismatch_flag = "Review"
-
-    # -----------------------------
-    # Final score and labels
-    # -----------------------------
-    total_score = round(
-        content_score
-        + image_score
-        + pricing_score
-        + search_score
-        + reviews_score
-        + channel_score,
-        1,
-    )
+    total_score = round(content_score + image_score + pricing_score + metadata_score, 1)
 
     if critical_issue or total_score < 60:
         priority = "High"
@@ -481,129 +261,37 @@ def analyze_row(row, col_map):
     else:
         priority = "Low"
 
-    if total_score < 40:
-        score_band = "0-39 Critical"
-    elif total_score < 60:
-        score_band = "40-59 High Priority"
-    elif total_score < 80:
-        score_band = "60-79 Medium Priority"
-    else:
-        score_band = "80-100 Healthy"
-
-    filled_fields = [
-        asin,
-        sku,
-        title,
-        brand,
-        category,
-        description,
-        meta_title,
-        channel,
-        *bullet_values,
-        *feature_values,
-        *image_values,
-        default_price if default_price > 0 else "",
-        sale_price if sale_price > 0 else "",
-        reviews if reviews > 0 else "",
-    ]
-    total_possible_fields = 8 + 4 + 4 + 5 + 3
-    populated_count = sum(1 for x in filled_fields if clean_text(x) != "")
-    completeness_pct = round((populated_count / total_possible_fields) * 100, 1)
-
-    feature_completeness_pct = round((len(populated_features) / 4) * 100, 1)
-    bullet_completeness_pct = round((len(populated_bullets) / 4) * 100, 1)
-
-    smart_aplus_readiness = "Yes" if total_score >= 80 and not critical_issue else "No"
-    smart_aplus_ready_flag = 1 if smart_aplus_readiness == "Yes" else 0
+    priority_rank = 1 if priority == "High" else 2 if priority == "Medium" else 3
+    top_issue_category = categories.most_common(1)[0][0] if categories else "Healthy"
     failure_reasons = "; ".join(dict.fromkeys(reasons))
     optimization_tips = "; ".join(dict.fromkeys(tips))
-    top_issue_category = categories.most_common(1)[0][0] if categories else "None"
-    critical_issue_flag = 1 if critical_issue else 0
-    warning_issue_count = len(dict.fromkeys(warning_reasons))
-    minor_issue_count = len(dict.fromkeys(minor_reasons))
-    critical_issue_count = len(dict.fromkeys(critical_reasons))
-    severity_label = (
-        "Critical"
-        if critical_issue_flag
-        else (
-            "Warning"
-            if warning_issue_count > 0
-            else ("Minor" if minor_issue_count > 0 else "Healthy")
-        )
-    )
-    priority_rank = 1 if priority == "High" else 2 if priority == "Medium" else 3
+    smart_a_plus_readiness = "Yes" if total_score >= 80 and not critical_issue else "No"
 
-    if critical_issue_flag:
+    if priority == "High":
         recommended_next_action = (
-            "Fix critical listing issues before publish or optimization"
+            tips[0] if tips else "Fix highest-impact listing issues"
         )
-    elif priority == "High":
-        if top_issue_category == "Images":
-            recommended_next_action = "Add primary image and complete gallery"
-        elif top_issue_category == "Pricing":
-            recommended_next_action = "Review default and sale price logic"
-        elif top_issue_category == "Content":
-            recommended_next_action = (
-                "Complete title, description, bullets, and features"
-            )
-        elif top_issue_category == "Identity":
-            recommended_next_action = (
-                "Populate missing ASIN, SKU, brand, or category data"
-            )
-        else:
-            recommended_next_action = (
-                "Review failure reasons and resolve the highest-impact gaps"
-            )
     elif priority == "Medium":
-        if top_issue_category == "SEO / Meta":
-            recommended_next_action = (
-                "Align meta title with product title and category keywords"
-            )
-        elif top_issue_category == "Reviews":
-            recommended_next_action = "Improve social proof and review coverage"
-        else:
-            recommended_next_action = "Address warnings to improve listing readiness"
+        recommended_next_action = tips[0] if tips else "Address warnings"
     else:
-        recommended_next_action = "Monitor listing and maintain content quality"
+        recommended_next_action = "Monitor listing quality"
 
     return {
         "optimization_score": total_score,
-        "content_score": round(content_score, 1),
-        "image_score": round(image_score, 1),
-        "pricing_score": round(pricing_score, 1),
-        "search_score": round(search_score, 1),
-        "reviews_score": round(reviews_score, 1),
-        "channel_score": round(channel_score, 1),
         "priority": priority,
         "priority_rank": priority_rank,
-        "score_band": score_band,
-        "smart_a_plus_readiness": smart_aplus_readiness,
-        "smart_a_plus_ready_flag": smart_aplus_ready_flag,
-        "completeness_pct": completeness_pct,
+        "top_issue_category": top_issue_category,
+        "smart_a_plus_readiness": smart_a_plus_readiness,
         "issue_count": len(set(reasons)),
         "failure_reasons": failure_reasons,
         "optimization_tips": optimization_tips,
-        "top_issue_category": top_issue_category,
-        "critical_issue_flag": critical_issue_flag,
-        "critical_issue_count": critical_issue_count,
-        "warning_issue_count": warning_issue_count,
-        "minor_issue_count": minor_issue_count,
-        "severity_label": severity_label,
         "recommended_next_action": recommended_next_action,
-        "image_completeness_pct": image_completeness_pct,
-        "missing_image_count": missing_image_count,
-        "feature_completeness_pct": feature_completeness_pct,
-        "bullet_completeness_pct": bullet_completeness_pct,
-        "pricing_issue_flag": pricing_issue_flag,
-        "discount_pct": discount_pct,
-        "title_meta_consistency_flag": "Yes" if overlap >= 0.25 else "No",
-        "channel_mismatch_flag": channel_mismatch_flag,
+        "sku_value": sku,
+        "asin_value": asin,
+        "title_value": title,
     }
 
 
-# -----------------------------
-# Main app logic
-# -----------------------------
 if uploaded_file is not None:
     try:
         file_name = uploaded_file.name.lower()
@@ -620,14 +308,14 @@ if uploaded_file is not None:
         columns = ["-- Not Mapped --"] + raw_columns
 
         st.sidebar.header("Column Mapping")
-        st.sidebar.caption(
-            "Map the columns that best match your file. Optional fields can stay unmapped."
-        )
 
         default_map = {
-            "asin": suggest_column(raw_columns, ["asin"]),
             "sku": suggest_column(raw_columns, ["sku", "item sku"]),
-            "title": suggest_column(raw_columns, ["title", "name", "product name"]),
+            "asin": suggest_column(raw_columns, ["asin"]),
+            "title": suggest_column(
+                raw_columns,
+                ["title", "product title", "product name", "name", "item name"],
+            ),
             "brand": suggest_column(raw_columns, ["brand"]),
             "category": suggest_column(raw_columns, ["category", "product type"]),
             "description": suggest_column(raw_columns, ["description"]),
@@ -641,9 +329,7 @@ if uploaded_file is not None:
             "bullet2": suggest_column(raw_columns, ["bullet2", "bullet 2"]),
             "bullet3": suggest_column(raw_columns, ["bullet3", "bullet 3"]),
             "bullet4": suggest_column(raw_columns, ["bullet4", "bullet 4"]),
-            "feature1": suggest_column(
-                raw_columns, ["feature1", "feature 1", "bullet", "features"]
-            ),
+            "feature1": suggest_column(raw_columns, ["feature1", "feature 1"]),
             "feature2": suggest_column(raw_columns, ["feature2", "feature 2"]),
             "feature3": suggest_column(raw_columns, ["feature3", "feature 3"]),
             "feature4": suggest_column(raw_columns, ["feature4", "feature 4"]),
@@ -658,13 +344,9 @@ if uploaded_file is not None:
             "sale_price": suggest_column(
                 raw_columns, ["sale price", "special price", "promo price"]
             ),
-            "reviews": suggest_column(
-                raw_columns, ["reviews", "review count", "rating count"]
-            ),
         }
 
         required_fields = [
-            "asin",
             "sku",
             "title",
             "brand",
@@ -674,6 +356,7 @@ if uploaded_file is not None:
             "default_price",
         ]
         optional_fields = [
+            "asin",
             "meta_title",
             "channel",
             "bullet1",
@@ -689,15 +372,13 @@ if uploaded_file is not None:
             "image4",
             "image5",
             "sale_price",
-            "reviews",
         ]
 
-        col_map = {}
-
+        col_map: Dict[str, str] = {}
         with st.sidebar.expander("Required fields", expanded=True):
             for field in required_fields:
                 col_map[field] = st.selectbox(
-                    f"{field.replace('_', ' ').title()}",
+                    f"{field.replace('_', ' ').title()} *",
                     columns,
                     index=get_index(columns, default_map[field]),
                     key=f"map_{field}",
@@ -706,12 +387,16 @@ if uploaded_file is not None:
         with st.sidebar.expander("Optional fields", expanded=False):
             for field in optional_fields:
                 col_map[field] = st.selectbox(
-                    f"{field.replace('_', ' ').title()}",
+                    field.replace("_", " ").title(),
                     columns,
                     index=get_index(columns, default_map[field]),
                     key=f"map_{field}",
                 )
 
+        st.markdown(
+            '### Selected Mapping <span style="color:#ef4444;">*required</span>',
+            unsafe_allow_html=True,
+        )
         mapping_df = pd.DataFrame(
             {
                 "Field": list(col_map.keys()),
@@ -722,20 +407,7 @@ if uploaded_file is not None:
                 ],
             }
         )
-
-        st.subheader("Selected Mapping")
         st.dataframe(mapping_df, use_container_width=True, hide_index=True)
-
-        selected_columns = [v for v in col_map.values() if v != "-- Not Mapped --"]
-        duplicate_columns = [
-            col for col in set(selected_columns) if selected_columns.count(col) > 1
-        ]
-        if duplicate_columns:
-            st.warning(
-                "You selected the same column more than once: "
-                + ", ".join(duplicate_columns)
-                + ". Double-check your mapping before running analysis."
-            )
 
         missing_required = [
             field for field in required_fields if col_map[field] == "-- Not Mapped --"
@@ -744,9 +416,24 @@ if uploaded_file is not None:
             st.error("Missing required mappings: " + ", ".join(missing_required))
             st.stop()
 
-        run_analysis = st.button(
+        current_uploaded_name = uploaded_file.name if uploaded_file is not None else ""
+        if current_uploaded_name != st.session_state.last_uploaded_name:
+            st.session_state.analysis_ready = False
+            st.session_state.output_df = None
+            st.session_state.source_file_name = ""
+            st.session_state.last_uploaded_name = current_uploaded_name
+
+        action_col1, action_col2 = st.columns([3.6, 1])
+        run_analysis = action_col1.button(
             "Run Analysis", type="primary", use_container_width=True
         )
+        clear_clicked = action_col2.button("Clear", use_container_width=True)
+
+        if clear_clicked:
+            st.session_state.analysis_ready = False
+            st.session_state.output_df = None
+            st.session_state.source_file_name = ""
+            st.rerun()
 
         if run_analysis:
             results_df = df.apply(
@@ -754,54 +441,44 @@ if uploaded_file is not None:
             )
             output_df = pd.concat([df.copy(), results_df], axis=1)
 
-            preferred_front = [
-                col_map["asin"],
+            front_cols = [
                 col_map["sku"],
+                col_map["asin"],
                 col_map["title"],
                 col_map["brand"],
                 col_map["category"],
                 col_map["channel"],
                 "optimization_score",
-                "content_score",
-                "image_score",
-                "pricing_score",
-                "search_score",
-                "reviews_score",
-                "channel_score",
                 "priority",
                 "priority_rank",
-                "score_band",
-                "smart_a_plus_readiness",
-                "smart_a_plus_ready_flag",
-                "completeness_pct",
-                "issue_count",
                 "top_issue_category",
-                "critical_issue_flag",
-                "critical_issue_count",
-                "warning_issue_count",
-                "minor_issue_count",
-                "severity_label",
+                "smart_a_plus_readiness",
+                "issue_count",
                 "recommended_next_action",
                 "failure_reasons",
                 "optimization_tips",
-                "image_completeness_pct",
-                "missing_image_count",
-                "feature_completeness_pct",
-                "bullet_completeness_pct",
-                "pricing_issue_flag",
-                "discount_pct",
-                "title_meta_consistency_flag",
-                "channel_mismatch_flag",
             ]
-            preferred_front = [
+            front_cols = [
                 c
-                for c in preferred_front
+                for c in front_cols
                 if c in output_df.columns and c != "-- Not Mapped --"
             ]
-            remaining_cols = [c for c in output_df.columns if c not in preferred_front]
-            output_df = output_df[preferred_front + remaining_cols]
+            remaining_cols = [c for c in output_df.columns if c not in front_cols]
+            output_df = output_df[front_cols + remaining_cols]
 
-            # Summary metrics
+            st.session_state.output_df = output_df
+            st.session_state.analysis_ready = True
+            st.session_state.source_file_name = file_name
+            st.session_state.current_mapping = col_map.copy()
+
+        if st.session_state.analysis_ready and st.session_state.output_df is not None:
+            output_df = st.session_state.output_df.copy()
+            active_map = (
+                st.session_state.current_mapping
+                if st.session_state.current_mapping
+                else col_map
+            )
+
             total_rows = len(output_df)
             high_count = int((output_df["priority"] == "High").sum())
             medium_count = int((output_df["priority"] == "Medium").sum())
@@ -811,200 +488,28 @@ if uploaded_file is not None:
             )
 
             st.subheader("Summary")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Total Rows", total_rows)
-            c2.metric("High Priority", high_count)
-            c3.metric("Medium Priority", medium_count)
-            c4.metric("Low Priority", low_count)
-            st.metric("Average Score", avg_score)
-
-            # Charts
-            st.subheader("Dashboard")
-
-            priority_chart = (
-                output_df["priority"]
-                .value_counts()
-                .reindex(["High", "Medium", "Low"], fill_value=0)
-            )
-            st.markdown("**Priority Distribution**")
-            st.bar_chart(priority_chart)
-
-            reason_counter = Counter()
-            for reason_string in output_df["failure_reasons"].fillna(""):
-                if clean_text(reason_string):
-                    for reason in [
-                        x.strip() for x in reason_string.split(";") if x.strip()
-                    ]:
-                        reason_counter[reason] += 1
-            top_reasons_df = pd.DataFrame(
-                reason_counter.most_common(10), columns=["Failure Reason", "Count"]
-            )
-            st.markdown("**Top Failure Reasons**")
-            if not top_reasons_df.empty:
-                st.bar_chart(top_reasons_df.set_index("Failure Reason"))
-            else:
-                st.info("No failure reasons found.")
-
-            score_band_chart = (
-                output_df["score_band"]
-                .value_counts()
-                .reindex(
-                    [
-                        "0-39 Critical",
-                        "40-59 High Priority",
-                        "60-79 Medium Priority",
-                        "80-100 Healthy",
-                    ],
-                    fill_value=0,
-                )
-            )
-            st.markdown("**Score Bands**")
-            st.bar_chart(score_band_chart)
-
-            st.subheader("Results")
-
-            st.markdown("**Filter and Sort**")
-            filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
-            priority_filter = filter_col1.multiselect(
-                "Priority",
-                options=["High", "Medium", "Low"],
-                default=["High", "Medium", "Low"],
-            )
-            channel_options = (
-                sorted(
-                    [
-                        x
-                        for x in output_df[col_map["channel"]]
-                        .dropna()
-                        .astype(str)
-                        .unique()
-                        .tolist()
-                    ]
-                )
-                if col_map["channel"] in output_df.columns
-                and col_map["channel"] != "-- Not Mapped --"
-                else []
-            )
-            channel_filter = (
-                filter_col2.multiselect(
-                    "Channel/Source",
-                    options=channel_options,
-                    default=channel_options,
-                )
-                if channel_options
-                else []
-            )
-            pricing_filter = filter_col3.selectbox(
-                "Pricing Issue Flag",
-                options=["All", "Yes", "No"],
-                index=0,
-            )
-            sort_by = filter_col4.selectbox(
-                "Sort By",
-                options=[
-                    "Priority Rank",
-                    "Optimization Score",
-                    "Issue Count",
-                    "Missing Image Count",
+            summary_df = pd.DataFrame(
+                [[total_rows, high_count, medium_count, low_count, avg_score]],
+                columns=[
+                    "Total Rows",
+                    "High Priority",
+                    "Medium Priority",
+                    "Low Priority",
+                    "Average Score",
                 ],
-                index=0,
             )
+            st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
-            filtered_df = output_df[output_df["priority"].isin(priority_filter)].copy()
-            if channel_options:
-                filtered_df = filtered_df[
-                    filtered_df[col_map["channel"]].astype(str).isin(channel_filter)
-                ]
-            if pricing_filter != "All":
-                filtered_df = filtered_df[
-                    filtered_df["pricing_issue_flag"] == pricing_filter
-                ]
-
-            if sort_by == "Priority Rank":
-                filtered_df = filtered_df.sort_values(
-                    by=["priority_rank", "optimization_score"], ascending=[True, True]
-                )
-            elif sort_by == "Optimization Score":
-                filtered_df = filtered_df.sort_values(
-                    by=["optimization_score"], ascending=[True]
-                )
-            elif sort_by == "Issue Count":
-                filtered_df = filtered_df.sort_values(
-                    by=["issue_count", "optimization_score"], ascending=[False, True]
-                )
-            elif sort_by == "Missing Image Count":
-                filtered_df = filtered_df.sort_values(
-                    by=["missing_image_count", "optimization_score"],
-                    ascending=[False, True],
-                )
-
-            def style_key_cells(row):
-                styles = ["" for _ in row.index]
-                priority_styles = {
-                    "High": "background-color: #7f1d1d; color: #ffffff; font-weight: 700;",
-                    "Medium": "background-color: #854d0e; color: #ffffff; font-weight: 700;",
-                    "Low": "background-color: #166534; color: #ffffff; font-weight: 700;",
-                }
-                score_styles = {
-                    "High": "background-color: #450a0a; color: #ffffff; font-weight: 700;",
-                    "Medium": "background-color: #78350f; color: #ffffff; font-weight: 700;",
-                    "Low": "background-color: #14532d; color: #ffffff; font-weight: 700;",
-                }
-                key_columns = [
-                    "priority",
-                    "priority_rank",
-                    "optimization_score",
-                    "smart_a_plus_readiness",
-                    "smart_a_plus_ready_flag",
-                ]
-                for col in key_columns:
-                    if col in row.index:
-                        styles[list(row.index).index(col)] = priority_styles.get(
-                            row["priority"], ""
-                        )
-                if "recommended_next_action" in row.index:
-                    styles[list(row.index).index("recommended_next_action")] = (
-                        "color: #e5e7eb; font-weight: 600;"
-                    )
-                if "severity_label" in row.index:
-                    severity_map = {
-                        "Critical": "background-color: #991b1b; color: #ffffff; font-weight: 700;",
-                        "Warning": "background-color: #92400e; color: #ffffff; font-weight: 700;",
-                        "Minor": "background-color: #1f2937; color: #ffffff; font-weight: 700;",
-                        "Healthy": "background-color: #065f46; color: #ffffff; font-weight: 700;",
-                    }
-                    styles[list(row.index).index("severity_label")] = severity_map.get(
-                        row["severity_label"], ""
-                    )
-                for identifier_col in [col_map["sku"], col_map["asin"]]:
-                    if identifier_col in row.index and row["priority"] == "High":
-                        styles[list(row.index).index(identifier_col)] = (
-                            "background-color: #3f0d12; color: #ffffff; font-weight: 700;"
-                        )
-                if "optimization_score" in row.index:
-                    styles[list(row.index).index("optimization_score")] = (
-                        score_styles.get(row["priority"], "")
-                    )
-                return styles
-
-            st.dataframe(
-                filtered_df.style.apply(style_key_cells, axis=1),
-                use_container_width=True,
-            )
-
-            st.info(
-                "This export is designed for internal review and prioritization. It is not formatted as an Amazon bulk upload template."
-            )
-
-            if file_name.endswith(".csv"):
-                output_data = filtered_df.to_csv(index=False).encode("utf-8")
-                output_file_name = "asin_aplus_prioritizer_v2_results.csv"
+            export_file_name = st.session_state.source_file_name.lower()
+            if export_file_name.endswith(".csv"):
+                output_data = output_df.to_csv(index=False).encode("utf-8")
+                output_file_name = "asin_aplus_prioritizer_results.csv"
                 output_mime = "text/csv"
             else:
                 output_buffer = BytesIO()
-                filtered_df.to_excel(output_buffer, index=False)
+                format_excel_export(output_buffer, output_df)
                 output_data = output_buffer.getvalue()
-                output_file_name = "asin_aplus_prioritizer_v2_results.xlsx"
+                output_file_name = "asin_aplus_prioritizer_results.xlsx"
                 output_mime = (
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
@@ -1016,6 +521,29 @@ if uploaded_file is not None:
                 mime=output_mime,
                 use_container_width=True,
             )
+
+            st.subheader("Results")
+            sort_by = st.selectbox(
+                "Sort By",
+                options=["Priority Rank", "Optimization Score", "Issue Count"],
+                index=0,
+            )
+
+            filtered_df = output_df.copy()
+            if sort_by == "Priority Rank":
+                filtered_df = filtered_df.sort_values(
+                    by=["priority_rank", "optimization_score"], ascending=[True, True]
+                )
+            elif sort_by == "Optimization Score":
+                filtered_df = filtered_df.sort_values(
+                    by=["optimization_score"], ascending=[True]
+                )
+            else:
+                filtered_df = filtered_df.sort_values(
+                    by=["issue_count", "optimization_score"], ascending=[False, True]
+                )
+
+            st.dataframe(filtered_df, use_container_width=True)
 
     except Exception as e:
         st.error(f"Error reading file: {e}")
